@@ -1033,7 +1033,7 @@ function createVinylNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
   return buffer;
 }
 
-// Offline Audio Renderer for WAV and MP3
+// Offline Audio Renderer for WAV
 async function renderAudioLoopBuffer(
   grid: Record<DrumType, boolean[]>,
   trackVolumes: Record<DrumType, number>,
@@ -1886,39 +1886,10 @@ export default function Component() {
     }
   };
 
-  const handleExportMp3 = async () => {
-    try {
-      setExportingFormat("MP3");
-      showNotice("Rendering Lo-Fi MP3 Loop with ID3 Tags...");
-      const audioBuffer = await renderAudioLoopBuffer(
-        grid,
-        trackVolumes,
-        trackMutes,
-        bpm,
-        swing,
-        tapeWarmth,
-        filterCutoff,
-        vinylLevel,
-        selectedKit,
-        2
-      );
-      const mp3Bytes = audioBufferToMp3(audioBuffer, bpm);
-      const blob = new Blob([mp3Bytes.buffer as ArrayBuffer], { type: "audio/mpeg" });
-      const filename = `vice_lofi_beat_${bpm}bpm.mp3`;
-      triggerDownload(blob, filename);
-      showNotice(`Exported ${filename} (MPEG Audio MP3)`);
-    } catch (err) {
-      console.error(err);
-      showNotice("MP3 export failed");
-    } finally {
-      setExportingFormat(null);
-    }
-  };
-
   const handleExportAll = async () => {
     try {
       setExportingFormat("ALL");
-      showNotice("Rendering full bundle (.WAV + .MP3 + .MID)...");
+      showNotice("Rendering full bundle (.WAV + .MID)...");
 
       // 1. MIDI
       const midiData = generateMidiFile(grid, bpm, swing);
@@ -1942,11 +1913,7 @@ export default function Component() {
       const wavBytes = audioBufferToWav(audioBuffer);
       triggerDownload(new Blob([wavBytes.buffer as ArrayBuffer], { type: "audio/wav" }), `vice_lofi_${bpm}bpm.wav`);
 
-      // 4. MP3
-      const mp3Bytes = audioBufferToMp3(audioBuffer, bpm);
-      triggerDownload(new Blob([mp3Bytes.buffer as ArrayBuffer], { type: "audio/mpeg" }), `vice_lofi_${bpm}bpm.mp3`);
-
-      showNotice(`Exported complete pack: .WAV, .MP3, and .MID downloaded!`);
+      showNotice(`Exported complete pack: .WAV and .MID downloaded!`);
     } catch (err) {
       console.error(err);
       showNotice("Bundle export failed");
@@ -1996,7 +1963,7 @@ export default function Component() {
                 </span>
               </div>
               <p className="text-xs text-slate-400 tracking-wide font-medium">
-                Leonida Beat Console • MIDI, WAV & MP3 Exporter
+                Lo-fi Drum Generator
               </p>
             </div>
           </div>
@@ -2409,7 +2376,7 @@ export default function Component() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#181524] text-slate-200 text-xs font-black uppercase tracking-wider shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-white active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition border border-pink-500/30 disabled:opacity-50 shrink-0"
             >
               <Download className="w-3.5 h-3.5 text-pink-400 shrink-0" />
-              <span>DOWNLOAD ALL (.WAV + .MP3 + .MID)</span>
+              <span>DOWNLOAD ALL (.WAV + .MID)</span>
             </button>
           </div>
 
@@ -2432,26 +2399,6 @@ export default function Component() {
                 </div>
               </div>
               <Download className="w-4 h-4 text-pink-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
-            </button>
-
-            {/* MP3 Export Button */}
-            <button
-              onClick={handleExportMp3}
-              disabled={exportingFormat !== null}
-              className="flex items-center justify-between p-3.5 rounded-xl bg-[#181524] shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:shadow-[2px_2px_5px_#0e0c16,-2px_-2px_5px_#221e32] active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition group disabled:opacity-50 text-left border border-white/[0.02]"
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] flex items-center justify-center text-orange-400 group-hover:scale-105 transition shrink-0">
-                  <Disc className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-slate-200 group-hover:text-orange-300 transition truncate">
-                    .MP3 AUDIO FILE
-                  </div>
-                  <div className="text-[10px] text-slate-500 truncate">MPEG with ID3 Tags</div>
-                </div>
-              </div>
-              <Download className="w-4 h-4 text-orange-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
             </button>
 
             {/* MIDI Export Button */}
