@@ -503,18 +503,17 @@ export const PRESETS: LoFiPreset[] = [
 // AUDIO SYNTHESIS & DSP HELPERS
 // ==========================================
 
-// Create soft saturation curve for analog tape warmth
-function makeDistortionCurve(amount: number): any {
-  const k = amount * 0.5;
-  const nSamples = 22050;
-  const curve = new Float32Array(nSamples);
-  const deg = Math.PI / 180;
-  for (let i = 0; i < nSamples; ++i) {
-    const x = (i * 2) / nSamples - 1;
-    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+// Master saturation curve lookup (generated once)
+const SATURATION_CURVE = (() => {
+  const n = 4096;
+  const curve = new Float32Array(n);
+  for (let i = 0; i < n; ++i) {
+    const x = (i * 2) / n - 1;
+    // Smooth tanh-like soft saturation
+    curve[i] = Math.tanh(x * 1.5) / Math.tanh(1.5);
   }
   return curve;
-}
+})();
 
 // Synthesize warm drum voices according to kit profile
 function triggerDrumVoice(
@@ -523,65 +522,35 @@ function triggerDrumVoice(
   drum: DrumType,
   time: number,
   volume: number,
-  tapeDrive: number,
-  filterFreq: number,
   kit: DrumKitProfile = DRUM_KITS[0]
 ) {
   const t = kit.tuning;
 
   // Master voice gain
   const voiceGain = ctx.createGain();
-  voiceGain.gain.setValueAtTime(volume, time);
+  voiceGain.gain.setValueAtTime(Math.max(0.01, volume), time);
+  voiceGain.connect(dest);
 
-  // Lowpass filter
-  const filter = ctx.createBiquadFilter();
-  filter.type = "lowpass";
-  filter.frequency.setValueAtTime(Math.min(filterFreq, 18000), time);
-  filter.Q.setValueAtTime(0.7, time);
-
-  // Warmth shelf boost (simulates analog tape / transformer low-end)
-  const shelf = ctx.createBiquadFilter();
-  shelf.type = "lowshelf";
-  shelf.frequency.setValueAtTime(120, time);
-  shelf.gain.setValueAtTime(t.warmthBoost || 0, time);
-
-  // Saturation drive
-  const totalDrive = Math.max(tapeDrive, t.kickDrive * 0.7);
-  if (totalDrive > 5) {
-    const shaper = ctx.createWaveShaper();
-    shaper.curve = makeDistortionCurve(totalDrive) as any;
-    shaper.oversample = "2x";
-    voiceGain.connect(shelf);
-    shelf.connect(filter);
-    filter.connect(shaper);
-    shaper.connect(dest);
-  } else {
-    voiceGain.connect(shelf);
-    shelf.connect(filter);
-    filter.connect(dest);
-  }
-
-  // 1. KICK SYNTHESIS (6 completely distinct physical architectures)
+  // 1. KICK SYNTHESIS
   if (drum === "kick") {
     if (t.kickType === "heavy_808") {
-      // 808 Sub Boom: Long sweeping sine + pitch glide + harmonic drive
+      // 808 Sub Boom: Long sweeping sine + sub drop
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(t.kickBaseFreq, time);
       osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.12);
 
-      oscGain.gain.setValueAtTime(1.1, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.kickDecay);
+      oscGain.gain.setValueAtTime(1.2, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.kickDecay);
 
-      // Saturated click transient
       const click = ctx.createOscillator();
       const clickGain = ctx.createGain();
-      click.type = "square";
+      click.type = "triangle";
       click.frequency.setValueAtTime(t.kickClickFreq, time);
-      click.frequency.exponentialRampToValueAtTime(20, time + 0.02);
-      clickGain.gain.setValueAtTime(t.kickClickAmt * 0.4, time);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, time + 0.025);
+      click.frequency.exponentialRampToValueAtTime(25, time + 0.025);
+      clickGain.gain.setValueAtTime(t.kickClickAmt * 0.7, time);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.03);
 
       osc.connect(oscGain);
       click.connect(clickGain);
@@ -591,27 +560,26 @@ function triggerDrumVoice(
       osc.start(time);
       click.start(time);
       osc.stop(time + t.kickDecay + 0.05);
-      click.stop(time + 0.03);
+      click.stop(time + 0.04);
 
     } else if (t.kickType === "punchy_acoustic") {
-      // Acoustic Kick: Beater click + dual shell resonance + rapid pitch fall
+      // Acoustic Kick: Beater click + dual shell resonance
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
-      osc.type = "triangle";
+      osc.type = "sine";
       osc.frequency.setValueAtTime(t.kickBaseFreq, time);
-      osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.05);
+      osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.06);
 
-      oscGain.gain.setValueAtTime(1.0, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.kickDecay);
+      oscGain.gain.setValueAtTime(1.1, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.kickDecay);
 
-      // Acoustic leather beater click
       const click = ctx.createOscillator();
       const clickGain = ctx.createGain();
       click.type = "sine";
       click.frequency.setValueAtTime(t.kickClickFreq, time);
-      click.frequency.exponentialRampToValueAtTime(45, time + 0.015);
+      click.frequency.exponentialRampToValueAtTime(45, time + 0.02);
       clickGain.gain.setValueAtTime(t.kickClickAmt * 0.9, time);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, time + 0.02);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.025);
 
       osc.connect(oscGain);
       click.connect(clickGain);
@@ -624,15 +592,15 @@ function triggerDrumVoice(
       click.stop(time + 0.03);
 
     } else if (t.kickType === "muffled_thump") {
-      // Muffled Felt/SP-303 Thud: Sine with high-cut, pillowy low end, almost zero click
+      // Muffled Felt/SP-303 Thud: Sine with high-cut, pillowy low end
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(t.kickBaseFreq, time);
       osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.14);
 
-      oscGain.gain.setValueAtTime(1.2, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.kickDecay);
+      oscGain.gain.setValueAtTime(1.3, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.kickDecay);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -641,20 +609,20 @@ function triggerDrumVoice(
       osc.stop(time + t.kickDecay + 0.05);
 
     } else if (t.kickType === "tight_box") {
-      // Boxy 60s/70s Kick: Narrow band resonance, high pitch knock, short dry decay
+      // Boxy 60s/70s Kick: Resonant bandpass knock
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
-      osc.type = "square";
+      osc.type = "triangle";
       osc.frequency.setValueAtTime(t.kickBaseFreq, time);
-      osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.03);
+      osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.04);
 
       const boxFilter = ctx.createBiquadFilter();
       boxFilter.type = "bandpass";
       boxFilter.frequency.setValueAtTime(t.kickBaseFreq * 0.9, time);
-      boxFilter.Q.setValueAtTime(2.5, time);
+      boxFilter.Q.setValueAtTime(2.0, time);
 
-      oscGain.gain.setValueAtTime(0.8, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.kickDecay);
+      oscGain.gain.setValueAtTime(1.0, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.kickDecay);
 
       osc.connect(boxFilter);
       boxFilter.connect(oscGain);
@@ -664,23 +632,23 @@ function triggerDrumVoice(
       osc.stop(time + t.kickDecay + 0.05);
 
     } else {
-      // Vintage Lo-Fi Sub: Standard warm pitch-envelope drop
+      // Vintage Lo-Fi Sub
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(t.kickBaseFreq, time);
       osc.frequency.exponentialRampToValueAtTime(t.kickEndFreq, time + 0.08);
 
-      oscGain.gain.setValueAtTime(1.0, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.kickDecay);
+      oscGain.gain.setValueAtTime(1.1, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.kickDecay);
 
       const click = ctx.createOscillator();
       const clickGain = ctx.createGain();
       click.type = "triangle";
       click.frequency.setValueAtTime(t.kickClickFreq, time);
       click.frequency.exponentialRampToValueAtTime(30, time + 0.02);
-      clickGain.gain.setValueAtTime(t.kickClickAmt * 0.6, time);
-      clickGain.gain.exponentialRampToValueAtTime(0.001, time + 0.025);
+      clickGain.gain.setValueAtTime(t.kickClickAmt * 0.7, time);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, time + 0.025);
 
       osc.connect(oscGain);
       click.connect(clickGain);
@@ -694,10 +662,10 @@ function triggerDrumVoice(
     }
   }
 
-  // 2. SNARE SYNTHESIS (6 distinct snare styles: rimshot, brush, acoustic room, lofi clap, crunch, fat)
+  // 2. SNARE SYNTHESIS
   else if (drum === "snare") {
     if (t.snareType === "wood_rimshot") {
-      // Organic Wood Rimshot: High-pitched wooden stick click + tiny acoustic body + dry decay
+      // Wood Rimshot
       const osc1 = ctx.createOscillator();
       const osc2 = ctx.createOscillator();
       const oscGain = ctx.createGain();
@@ -710,8 +678,8 @@ function triggerDrumVoice(
       osc2.frequency.setValueAtTime(t.snareBaseFreq * 1.8, time);
       osc2.frequency.exponentialRampToValueAtTime(280, time + 0.03);
 
-      oscGain.gain.setValueAtTime(0.9, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay);
+      oscGain.gain.setValueAtTime(1.0, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay);
 
       osc1.connect(oscGain);
       osc2.connect(oscGain);
@@ -723,7 +691,7 @@ function triggerDrumVoice(
       osc2.stop(time + t.snareDecay + 0.02);
 
     } else if (t.snareType === "papery_brush") {
-      // Swishing Paper/Jazz Brush: High noise wash, very soft body, long acoustic whisper
+      // Swishing Paper Brush
       const bufferSize = Math.floor(ctx.sampleRate * 0.35);
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const out = noiseBuffer.getChannelData(0);
@@ -738,8 +706,8 @@ function triggerDrumVoice(
 
       const nGain = ctx.createGain();
       nGain.gain.setValueAtTime(0.01, time);
-      nGain.gain.linearRampToValueAtTime(0.8, time + 0.015);
-      nGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay);
+      nGain.gain.linearRampToValueAtTime(0.9, time + 0.015);
+      nGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay);
 
       noise.connect(bp);
       bp.connect(nGain);
@@ -749,7 +717,7 @@ function triggerDrumVoice(
       noise.stop(time + t.snareDecay + 0.05);
 
     } else if (t.snareType === "lofi_clap") {
-      // Layered Handclap / Rim-Clap: Multiple staggered transient bursts
+      // Layered Handclap
       const clapTimes = [0, 0.012, 0.024, 0.036];
       clapTimes.forEach((dt, idx) => {
         const isFinal = idx === clapTimes.length - 1;
@@ -767,8 +735,8 @@ function triggerDrumVoice(
         bp.Q.setValueAtTime(1.8, time + dt);
 
         const nGain = ctx.createGain();
-        nGain.gain.setValueAtTime(isFinal ? 0.9 : 0.5, time + dt);
-        nGain.gain.exponentialRampToValueAtTime(0.001, time + dt + dur);
+        nGain.gain.setValueAtTime(isFinal ? 1.0 : 0.6, time + dt);
+        nGain.gain.exponentialRampToValueAtTime(0.0001, time + dt + dur);
 
         noise.connect(bp);
         bp.connect(nGain);
@@ -779,21 +747,20 @@ function triggerDrumVoice(
       });
 
     } else if (t.snareType === "digital_crunch") {
-      // 12-Bit MPC Crushed Snare: Ringing pitch body + bit-distorted aggressive burst
+      // 12-Bit MPC Crushed Snare
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sawtooth";
       osc.frequency.setValueAtTime(t.snareBaseFreq, time);
       osc.frequency.exponentialRampToValueAtTime(90, time + 0.07);
-      oscGain.gain.setValueAtTime(0.4 * t.snareBodyMix, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay);
+      oscGain.gain.setValueAtTime(0.5 * t.snareBodyMix, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay);
 
-      // Noisy burst
       const bufferSize = Math.floor(ctx.sampleRate * 0.25);
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const out = noiseBuffer.getChannelData(0);
       for (let i = 0; i < bufferSize; i++) {
-        out[i] = Math.sign(Math.random() * 2 - 1) * Math.random(); // Crushed quantization
+        out[i] = Math.sign(Math.random() * 2 - 1) * Math.random();
       }
       const noise = ctx.createBufferSource();
       noise.buffer = noiseBuffer;
@@ -803,8 +770,8 @@ function triggerDrumVoice(
       bp.Q.setValueAtTime(t.snareNoiseQ, time);
 
       const nGain = ctx.createGain();
-      nGain.gain.setValueAtTime(0.85, time);
-      nGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay);
+      nGain.gain.setValueAtTime(0.9, time);
+      nGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -818,14 +785,14 @@ function triggerDrumVoice(
       noise.stop(time + t.snareDecay + 0.05);
 
     } else {
-      // Fat Vintage & Room Acoustic: Dual layer shell body + warm filtered noise tail
+      // Fat Vintage & Room Acoustic
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "triangle";
       osc.frequency.setValueAtTime(t.snareBaseFreq, time);
       osc.frequency.exponentialRampToValueAtTime(80, time + 0.09);
-      oscGain.gain.setValueAtTime(0.7 * t.snareBodyMix, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay);
+      oscGain.gain.setValueAtTime(0.8 * t.snareBodyMix, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay);
 
       const bufferSize = Math.floor(ctx.sampleRate * 0.3);
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
@@ -833,7 +800,7 @@ function triggerDrumVoice(
       let lastVal = 0;
       for (let i = 0; i < bufferSize; i++) {
         const white = Math.random() * 2 - 1;
-        lastVal = t.snareNoiseTone === "pink" ? (lastVal + 0.08 * white) / 1.08 : white;
+        lastVal = (lastVal + 0.08 * white) / 1.08;
         out[i] = lastVal;
       }
       const noise = ctx.createBufferSource();
@@ -845,8 +812,8 @@ function triggerDrumVoice(
       bp.Q.setValueAtTime(t.snareNoiseQ, time);
 
       const nGain = ctx.createGain();
-      nGain.gain.setValueAtTime(0.8, time);
-      nGain.gain.exponentialRampToValueAtTime(0.001, time + t.snareDecay + 0.03);
+      nGain.gain.setValueAtTime(0.9, time);
+      nGain.gain.exponentialRampToValueAtTime(0.0001, time + t.snareDecay + 0.03);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -861,13 +828,12 @@ function triggerDrumVoice(
     }
   }
 
-  // 3. CLOSED HI-HAT (Metallic cluster vs. tape filtered tick vs. crunchy digital)
+  // 3. CLOSED HI-HAT
   else if (drum === "hatClosed") {
     if (t.hatClosedType === "crisp_metallic") {
-      // 6 Square Osc metallic cluster (authentic Roland TR-808/909 metallic algorithm)
       const freqs = [245, 306, 368, 422, 540, 800];
       const clusterGain = ctx.createGain();
-      clusterGain.gain.setValueAtTime(0.2, time);
+      clusterGain.gain.setValueAtTime(0.25, time);
 
       freqs.forEach((f) => {
         const osc = ctx.createOscillator();
@@ -884,22 +850,21 @@ function triggerDrumVoice(
       bp.Q.setValueAtTime(2.2, time);
 
       const hGain = ctx.createGain();
-      hGain.gain.setValueAtTime(0.8, time);
-      hGain.gain.exponentialRampToValueAtTime(0.001, time + t.hatClosedDecay);
+      hGain.gain.setValueAtTime(0.85, time);
+      hGain.gain.exponentialRampToValueAtTime(0.0001, time + t.hatClosedDecay);
 
       clusterGain.connect(bp);
       bp.connect(hGain);
       hGain.connect(voiceGain);
 
     } else if (t.hatClosedType === "subtle_tick") {
-      // Ultra-short tactile needle tick
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(4500, time);
       osc.frequency.exponentialRampToValueAtTime(800, time + 0.015);
-      oscGain.gain.setValueAtTime(0.9, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.hatClosedDecay);
+      oscGain.gain.setValueAtTime(0.95, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.hatClosedDecay);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -907,7 +872,6 @@ function triggerDrumVoice(
       osc.stop(time + t.hatClosedDecay + 0.01);
 
     } else {
-      // Filtered tape / crunchy noise hat
       const bufferSize = Math.floor(ctx.sampleRate * 0.1);
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const out = noiseBuffer.getChannelData(0);
@@ -920,8 +884,8 @@ function triggerDrumVoice(
       hp.frequency.setValueAtTime(t.hatClosedFreq, time);
 
       const hGain = ctx.createGain();
-      hGain.gain.setValueAtTime(0.75, time);
-      hGain.gain.exponentialRampToValueAtTime(0.001, time + t.hatClosedDecay);
+      hGain.gain.setValueAtTime(0.85, time);
+      hGain.gain.exponentialRampToValueAtTime(0.0001, time + t.hatClosedDecay);
 
       noise.connect(hp);
       hp.connect(hGain);
@@ -936,7 +900,7 @@ function triggerDrumVoice(
   else if (drum === "hatOpen") {
     const freqs = [310, 420, 540, 680, 890];
     const clusterGain = ctx.createGain();
-    clusterGain.gain.setValueAtTime(0.18, time);
+    clusterGain.gain.setValueAtTime(0.2, time);
 
     freqs.forEach((f) => {
       const osc = ctx.createOscillator();
@@ -952,18 +916,17 @@ function triggerDrumVoice(
     hp.frequency.setValueAtTime(t.hatOpenFreq, time);
 
     const hGain = ctx.createGain();
-    hGain.gain.setValueAtTime(0.85, time);
-    hGain.gain.exponentialRampToValueAtTime(0.001, time + t.hatOpenDecay);
+    hGain.gain.setValueAtTime(0.9, time);
+    hGain.gain.exponentialRampToValueAtTime(0.0001, time + t.hatOpenDecay);
 
     clusterGain.connect(hp);
     hp.connect(hGain);
     hGain.connect(voiceGain);
   }
 
-  // 5. PERCUSSION (Wood clave vs. bongo click vs. 808 analog cowbell vs. tape blip)
+  // 5. PERCUSSION
   else if (drum === "perc") {
     if (t.percType === "analog_cowbell") {
-      // Dual detuned square waves for authentic 808 cowbell
       const osc1 = ctx.createOscillator();
       const osc2 = ctx.createOscillator();
       const cowGain = ctx.createGain();
@@ -978,8 +941,8 @@ function triggerDrumVoice(
       bp.frequency.setValueAtTime(t.percPitch * 1.2, time);
       bp.Q.setValueAtTime(3.5, time);
 
-      cowGain.gain.setValueAtTime(0.9, time);
-      cowGain.gain.exponentialRampToValueAtTime(0.001, time + t.percDecay);
+      cowGain.gain.setValueAtTime(0.95, time);
+      cowGain.gain.exponentialRampToValueAtTime(0.0001, time + t.percDecay);
 
       osc1.connect(bp);
       osc2.connect(bp);
@@ -992,14 +955,13 @@ function triggerDrumVoice(
       osc2.stop(time + t.percDecay + 0.02);
 
     } else if (t.percType === "bongo_click") {
-      // Resonant Bongo/Conga Slap
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(t.percPitch * 1.5, time);
       osc.frequency.exponentialRampToValueAtTime(t.percPitch * 0.7, time + 0.04);
-      oscGain.gain.setValueAtTime(0.85, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.percDecay);
+      oscGain.gain.setValueAtTime(0.9, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.percDecay);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -1008,14 +970,13 @@ function triggerDrumVoice(
       osc.stop(time + t.percDecay + 0.02);
 
     } else {
-      // Wood Clave / Rim Tick
       const osc = ctx.createOscillator();
       const oscGain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.setValueAtTime(t.percPitch, time);
       osc.frequency.exponentialRampToValueAtTime(140, time + 0.02);
-      oscGain.gain.setValueAtTime(0.95, time);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, time + t.percDecay);
+      oscGain.gain.setValueAtTime(1.0, time);
+      oscGain.gain.exponentialRampToValueAtTime(0.0001, time + t.percDecay);
 
       osc.connect(oscGain);
       oscGain.connect(voiceGain);
@@ -1041,9 +1002,9 @@ function triggerDrumVoice(
     bp.Q.setValueAtTime(t.shakerPattern === "grainy" ? 1.2 : 2.5, time);
 
     const sGain = ctx.createGain();
-    sGain.gain.setValueAtTime(0.001, time);
-    sGain.gain.linearRampToValueAtTime(0.85, time + 0.012);
-    sGain.gain.exponentialRampToValueAtTime(0.001, time + t.shakerDecay);
+    sGain.gain.setValueAtTime(0.01, time);
+    sGain.gain.linearRampToValueAtTime(0.9, time + 0.012);
+    sGain.gain.exponentialRampToValueAtTime(0.0001, time + t.shakerDecay);
 
     noise.connect(bp);
     bp.connect(sGain);
@@ -1056,149 +1017,20 @@ function triggerDrumVoice(
 
 // Generate looping vinyl dust crackle
 function createVinylNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
-  const length = ctx.sampleRate * 3; // 3 second loop
+  const length = ctx.sampleRate * 3;
   const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
   const data = buffer.getChannelData(0);
   let lastVal = 0;
   for (let i = 0; i < length; i++) {
-    // Gentle pinkish hiss
     const white = Math.random() * 2 - 1;
     lastVal = (lastVal + 0.03 * white) / 1.03;
     let sample = lastVal * 0.15;
-
-    // Random needle dust clicks / pops
     if (Math.random() < 0.0015) {
-      const popStrength = (Math.random() * 2 - 1) * 0.7;
-      sample += popStrength;
+      sample += (Math.random() * 2 - 1) * 0.7;
     }
     data[i] = sample;
   }
   return buffer;
-}
-
-// ==========================================
-// EXPORTERS: MIDI, WAV & MP3
-// ==========================================
-
-// Variable Length Quantity (VLQ) writer for MIDI
-function writeVLQ(value: number): number[] {
-  const bytes: number[] = [];
-  bytes.push(value & 0x7f);
-  value >>= 7;
-  while (value > 0) {
-    bytes.unshift((value & 0x7f) | 0x80);
-    value >>= 7;
-  }
-  return bytes;
-}
-
-// Standard MIDI File (SMF Format 0) Generator
-export function generateMidiFile(
-  grid: Record<DrumType, boolean[]>,
-  bpm: number,
-  swing: number
-): Uint8Array {
-  const ppq = 480; // Ticks per quarter note
-  const stepTicks = ppq / 4; // 120 ticks per 16th note
-  const totalTicks = TOTAL_STEPS * stepTicks;
-
-  interface MidiEvent {
-    tick: number;
-    bytes: number[];
-  }
-  const events: MidiEvent[] = [];
-
-  // Tempo event (Microseconds per beat = 60,000,000 / BPM)
-  const mpqn = Math.round(60000000 / bpm);
-  events.push({
-    tick: 0,
-    bytes: [0xff, 0x51, 0x03, (mpqn >> 16) & 0xff, (mpqn >> 8) & 0xff, mpqn & 0xff],
-  });
-
-  // Time signature 4/4
-  events.push({
-    tick: 0,
-    bytes: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08],
-  });
-
-  // Track Name
-  const trackName = "Vice Lo-Fi Drums";
-  const nameBytes = Array.from(trackName).map((c) => c.charCodeAt(0));
-  events.push({
-    tick: 0,
-    bytes: [0xff, 0x03, nameBytes.length, ...nameBytes],
-  });
-
-  // Collect all drum note on/off events
-  DRUM_TRACKS.forEach((track) => {
-    const steps = grid[track.id];
-    steps.forEach((active, step) => {
-      if (!active) return;
-      let tick = step * stepTicks;
-      // Apply swing to odd steps (16th note swing)
-      if (step % 2 === 1 && swing > 0) {
-        tick += Math.round((swing / 100) * (stepTicks * 0.5));
-      }
-      const note = track.midiNote;
-      const velocity = 100;
-
-      // Note On (Channel 10 = 0x99)
-      events.push({
-        tick,
-        bytes: [0x99, note, velocity],
-      });
-
-      // Note Off after ~70 ticks
-      const noteDuration = 70;
-      events.push({
-        tick: Math.min(tick + noteDuration, totalTicks),
-        bytes: [0x89, note, 0],
-      });
-    });
-  });
-
-  // Sort events by tick
-  events.sort((a, b) => a.tick - b.tick);
-
-  // Convert to delta-time byte stream
-  const trackData: number[] = [];
-  let lastTick = 0;
-  events.forEach((ev) => {
-    const delta = Math.max(0, ev.tick - lastTick);
-    lastTick = ev.tick;
-    const vlq = writeVLQ(delta);
-    trackData.push(...vlq);
-    trackData.push(...ev.bytes);
-  });
-
-  // End of Track meta event
-  trackData.push(0x00, 0xff, 0x2f, 0x00);
-
-  // Construct full SMF Format 0 file
-  const header = [
-    // 'MThd'
-    0x4d, 0x54, 0x68, 0x64,
-    // Header length = 6
-    0x00, 0x00, 0x00, 0x06,
-    // Format 0 (single track)
-    0x00, 0x00,
-    // Number of tracks = 1
-    0x00, 0x01,
-    // Division = 480 PPQ
-    (ppq >> 8) & 0xff, ppq & 0xff,
-  ];
-
-  const trackHeader = [
-    // 'MTrk'
-    0x4d, 0x54, 0x72, 0x6b,
-    // Track length (4 bytes)
-    (trackData.length >> 24) & 0xff,
-    (trackData.length >> 16) & 0xff,
-    (trackData.length >> 8) & 0xff,
-    trackData.length & 0xff,
-  ];
-
-  return new Uint8Array([...header, ...trackHeader, ...trackData]);
 }
 
 // Offline Audio Renderer for WAV and MP3
@@ -1217,10 +1049,29 @@ async function renderAudioLoopBuffer(
   const sampleRate = 44100;
   const secondsPerBeat = 60 / bpm;
   const loopDuration = secondsPerBeat * 4 * bars; // 2 bars
-  const offlineCtx = new OfflineAudioContext(2, Math.ceil(sampleRate * loopDuration), sampleRate);
+  const offlineCtx = new OfflineAudioContext(2, Math.ceil(sampleRate * (loopDuration + 0.2)), sampleRate);
 
-  const stepDuration = secondsPerBeat / 4;
-  const totalStepsToRender = TOTAL_STEPS * bars;
+  // Master bus architecture (ensures 100% clean rendering without node choke)
+  const masterBus = offlineCtx.createGain();
+  masterBus.gain.setValueAtTime(1.1, 0);
+
+  // Master Tape Saturation
+  if (tapeWarmth > 5) {
+    const shaper = offlineCtx.createWaveShaper();
+    shaper.curve = SATURATION_CURVE as any;
+    shaper.oversample = "none"; // "none" guarantees flawless rendering in all browsers
+    masterBus.connect(shaper);
+    shaper.connect(offlineCtx.destination);
+  } else {
+    masterBus.connect(offlineCtx.destination);
+  }
+
+  // Master Lo-Fi Lowpass Filter
+  const masterFilter = offlineCtx.createBiquadFilter();
+  masterFilter.type = "lowpass";
+  masterFilter.frequency.setValueAtTime(Math.min(filterCutoff, 18000), 0);
+  masterFilter.Q.setValueAtTime(0.7, 0);
+  masterFilter.connect(masterBus);
 
   // Add subtle vinyl crackle
   if (vinylLevel > 0) {
@@ -1229,16 +1080,21 @@ async function renderAudioLoopBuffer(
     crackleSource.buffer = crackleBuffer;
     crackleSource.loop = true;
     const crackleGain = offlineCtx.createGain();
-    crackleGain.gain.setValueAtTime((vinylLevel / 100) * 0.18, 0);
+    crackleGain.gain.setValueAtTime((vinylLevel / 100) * 0.15, 0);
     crackleSource.connect(crackleGain);
-    crackleGain.connect(offlineCtx.destination);
+    crackleGain.connect(masterBus);
     crackleSource.start(0);
   }
+
+  const stepDuration = secondsPerBeat / 4;
+  const totalStepsToRender = TOTAL_STEPS * bars;
+  // Lead-in offset ensures step 0 never hits time = 0 dropouts
+  const leadIn = 0.02;
 
   // Schedule all drum triggers
   for (let s = 0; s < totalStepsToRender; s++) {
     const stepInPattern = s % TOTAL_STEPS;
-    let time = s * stepDuration;
+    let time = leadIn + s * stepDuration;
     if (stepInPattern % 2 === 1 && swing > 0) {
       time += (swing / 100) * (stepDuration * 0.5);
     }
@@ -1247,7 +1103,7 @@ async function renderAudioLoopBuffer(
       if (trackMutes[track.id]) return;
       if (grid[track.id][stepInPattern]) {
         const vol = trackVolumes[track.id];
-        triggerDrumVoice(offlineCtx, offlineCtx.destination, track.id, time, vol, tapeWarmth, filterCutoff, kit);
+        triggerDrumVoice(offlineCtx, masterFilter, track.id, time, vol, kit);
       }
     });
   }
@@ -1411,6 +1267,134 @@ export function audioBufferToMp3(buffer: AudioBuffer, bpm: number): Uint8Array {
   return new Uint8Array([...id3Header, ...mpegFramesData]);
 }
 
+// Variable Length Quantity (VLQ) writer for standard MIDI delta ticks
+function writeVLQ(value: number): number[] {
+  let buffer = value & 0x7f;
+  const bytes: number[] = [];
+  while ((value >>= 7)) {
+    buffer <<= 8;
+    buffer |= (value & 0x7f) | 0x80;
+  }
+  while (true) {
+    bytes.push(buffer & 0xff);
+    if (buffer & 0x80) buffer >>= 8;
+    else break;
+  }
+  return bytes;
+}
+
+// Generate Standard MIDI File (SMF Format 0, GM Drum Channel 10)
+export function generateMidiFile(
+  grid: Record<DrumType, boolean[]>,
+  bpm: number,
+  swing: number
+): Uint8Array {
+  const ppq = 480; // 480 ticks per quarter note
+  const stepTicks = ppq / 4; // 120 ticks per 16th note
+  const totalTicks = TOTAL_STEPS * stepTicks;
+
+  interface MidiEvent {
+    tick: number;
+    bytes: number[];
+  }
+
+  const events: MidiEvent[] = [];
+
+  // 1. Time Signature meta event (4/4 time): FF 58 04 04 02 18 08
+  events.push({
+    tick: 0,
+    bytes: [0xff, 0x58, 0x04, 0x04, 0x02, 0x18, 0x08],
+  });
+
+  // 2. Set Tempo meta event (FF 51 03 tt tt tt)
+  const usPerQuarter = Math.round(60000000 / bpm);
+  events.push({
+    tick: 0,
+    bytes: [
+      0xff,
+      0x51,
+      0x03,
+      (usPerQuarter >> 16) & 0xff,
+      (usPerQuarter >> 8) & 0xff,
+      usPerQuarter & 0xff,
+    ],
+  });
+
+  // 3. Track Name meta event: "Vice Drums Lo-Fi"
+  const trackName = "Vice Drums Lo-Fi";
+  const nameBytes = Array.from(trackName).map((c) => c.charCodeAt(0));
+  events.push({
+    tick: 0,
+    bytes: [0xff, 0x03, nameBytes.length, ...nameBytes],
+  });
+
+  // 4. Sequence Drum Notes
+  for (let s = 0; s < TOTAL_STEPS; s++) {
+    let tick = s * stepTicks;
+    if (s % 2 === 1 && swing > 0) {
+      tick += Math.round((swing / 100) * (stepTicks * 0.5));
+    }
+
+    DRUM_TRACKS.forEach((track) => {
+      if (!grid[track.id][s]) return;
+
+      const note = track.midiNote;
+      const velocity = Math.round(track.defaultVolume * 115);
+
+      // Note On (Channel 10 = 0x99)
+      events.push({
+        tick,
+        bytes: [0x99, note, velocity],
+      });
+
+      // Note Off after ~70 ticks
+      const noteDuration = 70;
+      events.push({
+        tick: Math.min(tick + noteDuration, totalTicks),
+        bytes: [0x89, note, 0],
+      });
+    });
+  }
+
+  // Sort events by tick time (stable)
+  events.sort((a, b) => a.tick - b.tick);
+
+  // Convert to delta-time byte stream
+  const trackData: number[] = [];
+  let lastTick = 0;
+  events.forEach((ev) => {
+    const delta = Math.max(0, ev.tick - lastTick);
+    lastTick = ev.tick;
+    const vlq = writeVLQ(delta);
+    trackData.push(...vlq);
+    trackData.push(...ev.bytes);
+  });
+
+  // End of Track meta event: 00 FF 2F 00
+  trackData.push(0x00, 0xff, 0x2f, 0x00);
+
+  // Header chunk: MThd, len 6, fmt 0, 1 track, 480 ppq
+  const header = [
+    0x4d, 0x54, 0x68, 0x64, // 'MThd'
+    0x00, 0x00, 0x00, 0x06, // length 6
+    0x00, 0x00,             // format 0
+    0x00, 0x01,             // 1 track
+    (ppq >> 8) & 0xff, ppq & 0xff,
+  ];
+
+  // Track chunk: MTrk, len, trackData
+  const trackLen = trackData.length;
+  const trackHeader = [
+    0x4d, 0x54, 0x72, 0x6b, // 'MTrk'
+    (trackLen >> 24) & 0xff,
+    (trackLen >> 16) & 0xff,
+    (trackLen >> 8) & 0xff,
+    trackLen & 0xff,
+  ];
+
+  return new Uint8Array([...header, ...trackHeader, ...trackData]);
+}
+
 // Download Helper
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -1426,7 +1410,7 @@ function triggerDownload(blob: Blob, filename: string) {
 // ==========================================
 // MAIN REACT COMPONENT
 // ==========================================
-export default function App() {
+export default function Component() {
   // State
   const [isPlaying, setIsPlaying] = useState(false);
   const [bpm, setBpm] = useState(78);
@@ -1515,13 +1499,13 @@ export default function App() {
       masterGainRef.current = master;
       analyserRef.current = analyser;
 
-      // Start vinyl crackle loop
+      // Start vinyl crackle loop (starts muted until RUN is pressed)
       const vinylBuffer = createVinylNoiseBuffer(ctx);
       const vSource = ctx.createBufferSource();
       vSource.buffer = vinylBuffer;
       vSource.loop = true;
       const vGain = ctx.createGain();
-      vGain.gain.setValueAtTime((vinylLevel / 100) * 0.18, ctx.currentTime);
+      vGain.gain.setValueAtTime(0, ctx.currentTime);
       vSource.connect(vGain);
       vGain.connect(master);
       vSource.start(0);
@@ -1533,16 +1517,17 @@ export default function App() {
     }
   }, [vinylLevel]);
 
-  // Adjust live vinyl volume
+  // Adjust live vinyl volume — only audibly active while playing!
   useEffect(() => {
     if (vinylGainRef.current && audioCtxRef.current) {
+      const targetGain = isPlaying ? (vinylLevel / 100) * 0.18 : 0;
       vinylGainRef.current.gain.setTargetAtTime(
-        (vinylLevel / 100) * 0.18,
+        targetGain,
         audioCtxRef.current.currentTime,
-        0.05
+        0.04
       );
     }
-  }, [vinylLevel]);
+  }, [vinylLevel, isPlaying]);
 
   // Web Audio Step Scheduler
   const scheduleStep = useCallback((step: number, time: number) => {
@@ -1560,8 +1545,6 @@ export default function App() {
           track.id,
           time,
           vol,
-          tapeWarmthRef.current,
-          filterCutoffRef.current,
           selectedKitRef.current
         );
       }
@@ -1744,8 +1727,6 @@ export default function App() {
         drum,
         audioCtxRef.current.currentTime,
         trackVolumes[drum],
-        tapeWarmth,
-        filterCutoff,
         selectedKit
       );
     }
