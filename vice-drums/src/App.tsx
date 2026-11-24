@@ -2451,6 +2451,9 @@ export default function Component() {
           <p className="max-w-2xl text-[9px] sm:text-[10px] text-slate-500/80 leading-relaxed font-sans mt-1">
             Disclaimer: "Leonida", "Vice City" and "Ocean Drive" are registered trademarks of Rockstar Games and Take-Two Interactive. Vice Drums is an independent, fan-made project and does not have any affiliation or endorsement with Rockstar Games or Take-Two Interactive.
           </p>
+          <p className="max-w-2xl text-[9px] sm:text-[10px] text-slate-500/80 leading-relaxed font-sans mt-1">
+            A Sonikraft Labs Project
+          </p>
         </footer>
 
       </div>
