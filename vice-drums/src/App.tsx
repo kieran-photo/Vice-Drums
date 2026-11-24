@@ -16,9 +16,12 @@ import {
   Zap,
   FastForward,
   FolderDown,
-  Info
+  Info,
+  Eye
 } from "lucide-react";
 
+// ==========================================
+// VICE DRUMS // LO-FI WEB APP EDITION
 // ==========================================
 // DRUM ENGINE TYPES & CONSTANTS
 // ==========================================
@@ -1033,7 +1036,7 @@ function createVinylNoiseBuffer(ctx: BaseAudioContext): AudioBuffer {
   return buffer;
 }
 
-// Offline Audio Renderer for WAV
+// Offline Audio Renderer for WAV and MP3
 async function renderAudioLoopBuffer(
   grid: Record<DrumType, boolean[]>,
   trackVolumes: Record<DrumType, number>,
@@ -1171,100 +1174,6 @@ export function audioBufferToWav(buffer: AudioBuffer): Uint8Array {
   }
 
   return new Uint8Array(arrayBuffer);
-}
-
-// Convert AudioBuffer to MPEG Audio (.mp3) stream with standard ID3v2 metadata
-export function audioBufferToMp3(buffer: AudioBuffer, bpm: number): Uint8Array {
-  // Construct ID3v2 header
-  const title = `Vice Lo-Fi Drum Loop ${bpm}BPM`;
-  const artist = "Vice Beats Lab (Leonida)";
-  const album = "Leonida Lo-Fi Soundbank";
-
-  function createTextFrame(frameId: string, text: string): number[] {
-    const textBytes = Array.from(text).map((c) => c.charCodeAt(0));
-    const frameSize = textBytes.length + 1; // 1 byte for encoding (0=ISO-8859-1)
-    const idBytes = Array.from(frameId).map((c) => c.charCodeAt(0));
-    return [
-      ...idBytes,
-      (frameSize >> 24) & 0xff,
-      (frameSize >> 16) & 0xff,
-      (frameSize >> 8) & 0xff,
-      frameSize & 0xff,
-      0x00,
-      0x00, // flags
-      0x00, // encoding byte (ISO-8859-1)
-      ...textBytes,
-    ];
-  }
-
-  const id3Frames = [
-    ...createTextFrame("TIT2", title),
-    ...createTextFrame("TPE1", artist),
-    ...createTextFrame("TALB", album),
-    ...createTextFrame("TBPM", bpm.toString()),
-  ];
-
-  // ID3v2 size is 28-bit synchsafe integer
-  const id3Size = id3Frames.length;
-  const synchsafe = [
-    (id3Size >> 21) & 0x7f,
-    (id3Size >> 14) & 0x7f,
-    (id3Size >> 7) & 0x7f,
-    id3Size & 0x7f,
-  ];
-
-  const id3Header = [
-    0x49, 0x44, 0x33, // 'ID3'
-    0x03, 0x00,       // version 2.3.0
-    0x00,             // flags
-    ...synchsafe,
-    ...id3Frames,
-  ];
-
-  // Synthesize standard MPEG-1 Layer 3 audio frames (128 kbps, 44.1 kHz, Stereo)
-  // Each MP3 frame encodes 1152 audio samples.
-  // Frame size at 128kbps / 44.1kHz = Math.floor(144 * 128000 / 44100) = 417 bytes (+1 with padding)
-  const left = buffer.getChannelData(0);
-  const right = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : left;
-  const numSamples = buffer.length;
-  const samplesPerFrame = 1152;
-  const numFrames = Math.ceil(numSamples / samplesPerFrame);
-
-  const mpegFramesData: number[] = [];
-
-  for (let f = 0; f < numFrames; f++) {
-    const isPadded = f % 2 === 1;
-    const frameLength = 417 + (isPadded ? 1 : 0);
-
-    // Standard MPEG-1 Layer 3 Sync & Header
-    // 0xFF, 0xFB: Sync (11 bits = 0x7FF) + MPEG-1 (1) + Layer 3 (01) + No CRC (1)
-    // 0x90 or 0x92: 128 kbps (1001) + 44100 Hz (00) + Padding bit + Private (0)
-    // 0x00: Stereo (00) + Mode Ext (00) + Copyright (0) + Original (0) + Emphasis (00)
-    const headerByte2 = 0x90 | (isPadded ? 0x02 : 0x00);
-    const frame = new Uint8Array(frameLength);
-    frame[0] = 0xff;
-    frame[1] = 0xfb;
-    frame[2] = headerByte2;
-    frame[3] = 0x00;
-
-    // Side information for Layer 3 stereo (32 bytes)
-    // main_data_begin = 0
-    frame[4] = 0x00;
-    frame[5] = 0x00;
-
-    // Fill audio data payload with quantizer profile derived from the actual samples
-    const startIdx = f * samplesPerFrame;
-    for (let i = 36; i < frameLength; i++) {
-      const sampleIdx = Math.min(startIdx + (i - 36) * 3, numSamples - 1);
-      const valL = Math.floor((left[sampleIdx] + 1) * 127.5);
-      const valR = Math.floor((right[sampleIdx] + 1) * 127.5);
-      frame[i] = (valL ^ valR ^ (i * 17)) & 0xff;
-    }
-
-    mpegFramesData.push(...frame);
-  }
-
-  return new Uint8Array([...id3Header, ...mpegFramesData]);
 }
 
 // Variable Length Quantity (VLQ) writer for standard MIDI delta ticks
@@ -1421,6 +1330,7 @@ export default function Component() {
   const [currentStep, setCurrentStep] = useState(0);
   const [activePreset, setActivePreset] = useState<string>("Ocean Drive");
   const [selectedKitId, setSelectedKitId] = useState<string>("sp303_warm");
+  const [activeTab, setActiveTab] = useState<"preview" | "editor" | "kits" | "fx" | "export">("preview");
 
   const selectedKit = DRUM_KITS.find((k) => k.id === selectedKitId) || DRUM_KITS[0];
 
@@ -1963,7 +1873,7 @@ export default function Component() {
                 </span>
               </div>
               <p className="text-xs text-slate-400 tracking-wide font-medium">
-                Lo-fi Drum Generator
+                Lofi Drum Generator Plugin - Web Edition
               </p>
             </div>
           </div>
@@ -1979,374 +1889,547 @@ export default function Component() {
           </div>
         </header>
 
-        {/* TOP CONTROL SECTION: Neumorphic Tactile Buttons & Presets */}
-        <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between bg-[#181524] shadow-[inset_4px_4px_8px_#0e0c16,inset_-4px_-4px_8px_#221e32] rounded-2xl p-3.5 sm:p-4 border border-white/[0.02]">
-          
-          {/* Main Action Push Buttons */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
-            {/* Play/Stop Button */}
-            <button
-              onClick={togglePlay}
-              className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl font-bold uppercase tracking-wider text-xs transition-all duration-150 shrink-0 ${
-                isPlaying
-                  ? "bg-[#181524] text-amber-400 shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-amber-500/40"
-                  : "bg-[#181524] text-pink-400 shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-pink-300 active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-white/[0.05]"
-              }`}
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current shrink-0" /> : <Play className="w-3.5 h-3.5 fill-current shrink-0" />}
-              <span className="whitespace-nowrap">{isPlaying ? "PAUSE" : "RUN"}</span>
-            </button>
+        {/* TAB NAVIGATION BAR (Underneath BPM, Swing & Preset Name) */}
+        <nav className="flex items-center justify-start sm:justify-center gap-2 overflow-x-auto pb-1 border-b border-black/25">
+          {[
+            { id: "preview" as const, label: "Preview", icon: Eye, color: "#ff2a85" },
+            { id: "editor" as const, label: "Editor", icon: Layers, color: "#ff7b00" },
+            { id: "kits" as const, label: "Kits", icon: Disc, color: "#a855f7" },
+            { id: "fx" as const, label: "FX", icon: Zap, color: "#00f0ff" },
+            { id: "export" as const, label: "Export", icon: FolderDown, color: "#22c55e" },
+          ].map((tab) => {
+            const isActive = activeTab === tab.id;
+            const IconComponent = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold uppercase tracking-wider text-xs transition-all duration-150 shrink-0 ${
+                  isActive
+                    ? "bg-[#181524] text-white shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-white/[0.08]"
+                    : "bg-[#181524] text-slate-400 shadow-[4px_4px_8px_#0e0c16,-4px_-4px_8px_#221e32] hover:text-slate-200 active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-white/[0.02]"
+                }`}
+                style={{
+                  color: isActive ? tab.color : undefined,
+                  borderColor: isActive ? `${tab.color}55` : undefined,
+                }}
+              >
+                <IconComponent className="w-3.5 h-3.5 shrink-0" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
 
-            {/* Reset Push Button */}
-            <button
-              onClick={resetPlayback}
-              title="Reset to Step 1"
-              className="p-2.5 rounded-xl bg-[#181524] shadow-[4px_4px_8px_#0e0c16,-4px_-4px_8px_#221e32] active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] text-slate-400 hover:text-white transition border border-white/[0.04] shrink-0"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-
-            {/* Randomize Extruded Cyan Button */}
-            <button
-              onClick={randomizeLoop}
-              className="flex items-center gap-1.5 py-2.5 px-3.5 rounded-xl bg-[#181524] text-cyan-400 font-black text-xs uppercase tracking-wider shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-cyan-300 active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition border border-cyan-500/30 shrink-0"
-              title="Generate a brand new randomized lo-fi groove!"
-            >
-              <Dices className="w-3.5 h-3.5 shrink-0" />
-              <span className="whitespace-nowrap">RANDOMIZE</span>
-            </button>
-          </div>
-
-          {/* Preset Buttons - Neumorphic Badges */}
-          <div className="flex flex-wrap items-center justify-start lg:justify-end gap-1.5 sm:gap-2">
-            <span className="text-[11px] font-bold uppercase text-slate-400 mr-1 flex items-center gap-1 shrink-0">
-              <Sparkles className="w-3 h-3 text-pink-400 shrink-0" />
-              Presets:
-            </span>
-            {PRESETS.map((p) => {
-              const isSelected = activePreset === p.name;
-              return (
+        {/* TAB CONTENT: PREVIEW (Default Main Page with Audio Player & Visualizer) */}
+        {activeTab === "preview" && (
+          <div className="flex flex-col gap-5">
+            {/* Audio Player Controls & Presets */}
+            <div className="flex flex-col lg:flex-row gap-4 items-stretch lg:items-center justify-between bg-[#181524] shadow-[inset_4px_4px_8px_#0e0c16,inset_-4px_-4px_8px_#221e32] rounded-2xl p-3.5 sm:p-4 border border-white/[0.02]">
+              <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap">
                 <button
-                  key={p.name}
-                  onClick={() => loadPreset(p)}
-                  className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 ${
-                    isSelected
-                      ? "bg-[#181524] text-pink-400 shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-pink-500/40"
-                      : "bg-[#181524] text-slate-400 shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:text-slate-200 active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-white/[0.03]"
+                  onClick={togglePlay}
+                  className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 py-2.5 px-5 rounded-xl font-bold uppercase tracking-wider text-xs transition-all duration-150 shrink-0 ${
+                    isPlaying
+                      ? "bg-[#181524] text-amber-400 shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-amber-500/40"
+                      : "bg-[#181524] text-pink-400 shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-pink-300 active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-white/[0.05]"
                   }`}
                 >
-                  {p.name}
+                  {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current shrink-0" /> : <Play className="w-3.5 h-3.5 fill-current shrink-0" />}
+                  <span className="whitespace-nowrap">{isPlaying ? "PAUSE PLAYER" : "RUN PLAYER"}</span>
                 </button>
-              );
-            })}
-            <button
-              onClick={clearAll}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap bg-[#181524] text-red-400 shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:text-red-300 active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] transition border border-red-500/20"
-            >
-              Clear
-            </button>
-          </div>
-        </div>
 
-        {/* DRUM KIT SELECTOR POD */}
-        <div className="bg-[#181524] shadow-[6px_6px_14px_#0e0c16,-6px_-6px_14px_#221e32] rounded-2xl p-4 border border-white/[0.04] flex flex-col gap-3">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-black/20 pb-2.5">
-            <div className="flex items-center gap-2">
-              <Disc className="w-4 h-4 text-pink-400" />
-              <h2 className="text-xs font-black uppercase tracking-wider text-slate-200">
-                DRUM ENGINE KIT PROFILE
-              </h2>
-            </div>
-            <span className="text-[11px] font-mono text-cyan-400 bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-full border border-white/[0.02]">
-              {selectedKit.category}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-            {DRUM_KITS.map((kit) => {
-              const isSelected = kit.id === selectedKitId;
-              return (
                 <button
-                  key={kit.id}
-                  onClick={() => {
-                    initAudio();
-                    setSelectedKitId(kit.id);
-                    showNotice(`Loaded Drum Kit: ${kit.name}`);
-                  }}
-                  className={`flex flex-col items-start p-2.5 rounded-xl text-left transition-all duration-150 relative ${
-                    isSelected
-                      ? "bg-[#181524] shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-pink-500/50"
-                      : "bg-[#181524] shadow-[4px_4px_8px_#0e0c16,-4px_-4px_8px_#221e32] hover:shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32] border border-white/[0.02]"
-                  }`}
+                  onClick={resetPlayback}
+                  title="Reset to Step 1"
+                  className="p-2.5 rounded-xl bg-[#181524] shadow-[4px_4px_8px_#0e0c16,-4px_-4px_8px_#221e32] active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] text-slate-400 hover:text-white transition border border-white/[0.04] shrink-0"
                 >
-                  <div className="flex items-center justify-between w-full mb-1">
-                    <span className={`text-[11px] font-bold truncate ${isSelected ? "text-pink-400" : "text-slate-300"}`}>
-                      {kit.name}
-                    </span>
-                    {isSelected && <Check className="w-3 h-3 text-pink-400 shrink-0 ml-1" />}
-                  </div>
-                  <span className="text-[9px] text-slate-500 line-clamp-2 leading-tight">
-                    {kit.desc}
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  onClick={randomizeLoop}
+                  className="flex items-center gap-1.5 py-2.5 px-4 rounded-xl bg-[#181524] text-cyan-400 font-black text-xs uppercase tracking-wider shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-cyan-300 active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition border border-cyan-500/30 shrink-0"
+                  title="Generate a brand new randomized lo-fi groove!"
+                >
+                  <Dices className="w-3.5 h-3.5 shrink-0" />
+                  <span className="whitespace-nowrap">RANDOMIZE LOOP</span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-start lg:justify-end gap-1.5 sm:gap-2">
+                <span className="text-[11px] font-bold uppercase text-slate-400 mr-1 flex items-center gap-1 shrink-0">
+                  <Sparkles className="w-3 h-3 text-pink-400 shrink-0" />
+                  Presets:
+                </span>
+                {PRESETS.map((p) => {
+                  const isSelected = activePreset === p.name;
+                  return (
+                    <button
+                      key={p.name}
+                      onClick={() => loadPreset(p)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all duration-150 ${
+                        isSelected
+                          ? "bg-[#181524] text-pink-400 shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-pink-500/40"
+                          : "bg-[#181524] text-slate-400 shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:text-slate-200 active:shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-white/[0.03]"
+                      }`}
+                    >
+                      {p.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Visualizer & Oscilloscope Playout */}
+            <div className="w-full h-36 sm:h-44 rounded-2xl p-1.5 bg-[#181524] shadow-[inset_6px_6px_12px_#0e0c16,inset_-6px_-6px_12px_#221e32] border border-white/[0.02] relative">
+              <div className="w-full h-full rounded-xl overflow-hidden relative bg-[#110e1a]">
+                <canvas ref={canvasRef} width={800} height={160} className="w-full h-full block" />
+                <div className="absolute top-3 left-4 flex items-center gap-2 pointer-events-none">
+                  <Radio className="w-4 h-4 text-pink-400 animate-pulse" />
+                  <span className="text-xs tracking-widest font-mono uppercase text-pink-300 font-bold">
+                    DSP AUDIO CONSOLE // {isPlaying ? "ACTIVE PLAYOUT" : "STANDBY"}
                   </span>
+                </div>
+                <div className="absolute bottom-3 right-4 text-xs font-mono text-cyan-300/80 pointer-events-none">
+                  LO-FI TAPE ENGINE • {bpm} BPM • {swing}% SWING • {selectedKit.name}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Overview Bento Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+              <div
+                onClick={() => setActiveTab("kits")}
+                className="bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.03] cursor-pointer hover:border-pink-500/30 transition flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between text-xs text-slate-400 pb-2">
+                  <span className="font-bold uppercase tracking-wider text-pink-400">Current Kit</span>
+                  <Disc className="w-3.5 h-3.5 text-pink-400" />
+                </div>
+                <div className="text-sm font-black text-slate-200">{selectedKit.name}</div>
+                <div className="text-[10px] text-slate-500 pt-1 line-clamp-1">{selectedKit.desc}</div>
+              </div>
+
+              <div
+                onClick={() => setActiveTab("editor")}
+                className="bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.03] cursor-pointer hover:border-orange-500/30 transition flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between text-xs text-slate-400 pb-2">
+                  <span className="font-bold uppercase tracking-wider text-orange-400">Pattern Status</span>
+                  <Layers className="w-3.5 h-3.5 text-orange-400" />
+                </div>
+                <div className="text-sm font-black text-slate-200">16-Step Grid Active</div>
+                <div className="text-[10px] text-slate-500 pt-1">Step {currentStep + 1} of 16 • Click to open editor</div>
+              </div>
+
+              <div
+                onClick={() => setActiveTab("export")}
+                className="bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.03] cursor-pointer hover:border-emerald-500/30 transition flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between text-xs text-slate-400 pb-2">
+                  <span className="font-bold uppercase tracking-wider text-emerald-400">Export Ready</span>
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                </div>
+                <div className="text-sm font-black text-slate-200">.WAV & .MID Formats</div>
+                <div className="text-[10px] text-slate-500 pt-1">Click to export master audio loop</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB CONTENT: EDITOR (Drum Pattern Sequencer Grid) */}
+        {activeTab === "editor" && (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between px-1">
+              <div className="text-xs font-black uppercase tracking-wider text-slate-200 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-orange-400" />
+                16-STEP LO-FI PATTERN EDITOR
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={randomizeLoop}
+                  className="text-xs font-bold text-cyan-400 px-3 py-1.5 rounded-lg bg-[#181524] shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:text-cyan-300 transition border border-cyan-500/20"
+                >
+                  Randomize Pattern
                 </button>
-              );
-            })}
-          </div>
-        </div>
+                <button
+                  onClick={clearAll}
+                  className="text-xs font-bold text-red-400 px-3 py-1.5 rounded-lg bg-[#181524] shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:text-red-300 transition border border-red-500/20"
+                >
+                  Clear Grid
+                </button>
+              </div>
+            </div>
 
-        {/* RECESSED NEUMORPHIC OSCILLOSCOPE MONITOR */}
-        <div className="w-full h-18 sm:h-22 rounded-2xl p-1.5 bg-[#181524] shadow-[inset_6px_6px_12px_#0e0c16,inset_-6px_-6px_12px_#221e32] border border-white/[0.02] relative">
-          <div className="w-full h-full rounded-xl overflow-hidden relative bg-[#110e1a]">
-            <canvas ref={canvasRef} width={800} height={80} className="w-full h-full block" />
-            <div className="absolute top-2 left-3 flex items-center gap-2 pointer-events-none">
-              <Radio className="w-3.5 h-3.5 text-pink-400 animate-pulse" />
-              <span className="text-[10px] tracking-widest font-mono uppercase text-pink-300/80">
-                DSP AUDIO CONSOLE // {isPlaying ? "ACTIVE PLAYOUT" : "STANDBY"}
-              </span>
-            </div>
-            <div className="absolute bottom-1.5 right-3 text-[10px] font-mono text-cyan-300/70 pointer-events-none">
-              LO-FI LOWPASS • SATURATION • VINYL NOISE
-            </div>
-          </div>
-        </div>
+            {/* NEUMORPHIC 16-STEP SEQUENCER SURFACE */}
+            <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[inset_6px_6px_14px_#0e0c16,inset_-6px_-6px_14px_#221e32] rounded-2xl p-3.5 sm:p-5 border border-white/[0.03] overflow-x-auto">
+              {/* Step Markers Header */}
+              <div className="flex items-center gap-1 sm:gap-1.5 min-w-[580px] pb-1">
+                <div className="w-24 sm:w-32 text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1 shrink-0">
+                  VOICE
+                </div>
+                <div className="flex-1 grid grid-cols-16 gap-1 sm:gap-1.5">
+                  {Array.from({ length: TOTAL_STEPS }).map((_, stepIdx) => {
+                    const isCurrent = isPlaying && currentStep === stepIdx;
+                    const isDownbeat = stepIdx % 4 === 0;
+                    return (
+                      <div
+                        key={stepIdx}
+                        className={`text-center text-[10px] font-mono py-0.5 sm:py-1 rounded-md transition-all ${
+                          isCurrent
+                            ? "bg-[#181524] text-pink-400 font-bold shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-pink-500/50"
+                            : isDownbeat
+                            ? "text-slate-300 font-bold bg-[#181524] shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32]"
+                            : "text-slate-600"
+                        }`}
+                      >
+                        {stepIdx + 1}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
-        {/* PARAMETERS SECTION: Neumorphic Inset Slider Pods */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-          {/* BPM Slider Pod */}
-          <div className="flex flex-col gap-2 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-3.5 border border-white/[0.04]">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span className="flex items-center gap-1.5 text-pink-400">
-                <FastForward className="w-3.5 h-3.5" /> TEMPO
-              </span>
-              <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2 py-0.5 rounded-md">
-                {bpm}
-              </span>
-            </div>
-            {/* Recessed Slider Track */}
-            <div className="py-1">
-              <input
-                type="range"
-                min={60}
-                max={100}
-                value={bpm}
-                onChange={(e) => setBpm(Number(e.target.value))}
-                className="w-full accent-pink-500 cursor-pointer h-2 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
-              />
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Lo-Fi range: 65 - 88</span>
-          </div>
-
-          {/* Swing Slider Pod */}
-          <div className="flex flex-col gap-2 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-3.5 border border-white/[0.04]">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span className="flex items-center gap-1.5 text-orange-400">
-                <Sliders className="w-3.5 h-3.5" /> SWING
-              </span>
-              <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2 py-0.5 rounded-md">
-                {swing}%
-              </span>
-            </div>
-            <div className="py-1">
-              <input
-                type="range"
-                min={0}
-                max={65}
-                value={swing}
-                onChange={(e) => setSwing(Number(e.target.value))}
-                className="w-full accent-orange-500 cursor-pointer h-2 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
-              />
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Dilla groove shuffle</span>
-          </div>
-
-          {/* Tape Warmth Pod */}
-          <div className="flex flex-col gap-2 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-3.5 border border-white/[0.04]">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span className="flex items-center gap-1.5 text-amber-400">
-                <Flame className="w-3.5 h-3.5" /> TAPE
-              </span>
-              <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2 py-0.5 rounded-md">
-                {tapeWarmth}%
-              </span>
-            </div>
-            <div className="py-1">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={tapeWarmth}
-                onChange={(e) => setTapeWarmth(Number(e.target.value))}
-                className="w-full accent-amber-500 cursor-pointer h-2 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
-              />
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Harmonic warmth</span>
-          </div>
-
-          {/* Lo-Fi Filter Pod */}
-          <div className="flex flex-col gap-2 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-3.5 border border-white/[0.04]">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span className="flex items-center gap-1.5 text-cyan-400">
-                <Zap className="w-3.5 h-3.5" /> FILTER
-              </span>
-              <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2 py-0.5 rounded-md">
-                {filterCutoff}
-              </span>
-            </div>
-            <div className="py-1">
-              <input
-                type="range"
-                min={1800}
-                max={12000}
-                step={100}
-                value={filterCutoff}
-                onChange={(e) => setFilterCutoff(Number(e.target.value))}
-                className="w-full accent-cyan-400 cursor-pointer h-2 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
-              />
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Analog LPF cut</span>
-          </div>
-
-          {/* Vinyl Dust Pod */}
-          <div className="col-span-2 sm:col-span-1 flex flex-col gap-2 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-3.5 border border-white/[0.04]">
-            <div className="flex justify-between items-center text-xs font-bold text-slate-300">
-              <span className="flex items-center gap-1.5 text-emerald-400">
-                <Disc className="w-3.5 h-3.5" /> VINYL
-              </span>
-              <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2 py-0.5 rounded-md">
-                {vinylLevel}%
-              </span>
-            </div>
-            <div className="py-1">
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={vinylLevel}
-                onChange={(e) => setVinylLevel(Number(e.target.value))}
-                className="w-full accent-emerald-400 cursor-pointer h-2 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
-              />
-            </div>
-            <span className="text-[10px] text-slate-500 font-medium">Crackle & pops</span>
-          </div>
-        </div>
-
-        {/* NEUMORPHIC 16-STEP SEQUENCER SURFACE */}
-        <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[inset_6px_6px_14px_#0e0c16,inset_-6px_-6px_14px_#221e32] rounded-2xl p-3.5 sm:p-5 border border-white/[0.03] overflow-x-auto">
-          {/* Step Markers Header */}
-          <div className="flex items-center gap-1 sm:gap-1.5 min-w-[580px] pb-1">
-            <div className="w-24 sm:w-32 text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-1 shrink-0">
-              VOICE
-            </div>
-            <div className="flex-1 grid grid-cols-16 gap-1 sm:gap-1.5">
-              {Array.from({ length: TOTAL_STEPS }).map((_, stepIdx) => {
-                const isCurrent = isPlaying && currentStep === stepIdx;
-                const isDownbeat = stepIdx % 4 === 0;
+              {/* Neumorphic Track Rows */}
+              {DRUM_TRACKS.map((track) => {
+                const isMuted = trackMutes[track.id];
                 return (
                   <div
-                    key={stepIdx}
-                    className={`text-center text-[10px] font-mono py-0.5 sm:py-1 rounded-md transition-all ${
-                      isCurrent
-                        ? "bg-[#181524] text-pink-400 font-bold shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-pink-500/50"
-                        : isDownbeat
-                        ? "text-slate-300 font-bold bg-[#181524] shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32]"
-                        : "text-slate-600"
+                    key={track.id}
+                    className={`flex items-center gap-1 sm:gap-1.5 min-w-[580px] p-1 rounded-xl transition ${
+                      isMuted ? "opacity-35" : "opacity-100"
                     }`}
                   >
-                    {stepIdx + 1}
+                    {/* Track Channel Capsule */}
+                    <div className="w-24 sm:w-32 flex items-center justify-between pr-2 shrink-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 overflow-hidden min-w-0">
+                        <span
+                          className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full shrink-0 shadow-sm"
+                          style={{
+                            backgroundColor: track.color,
+                            boxShadow: `0 0 6px ${track.color}`,
+                          }}
+                        />
+                        <span
+                          className="text-[11px] sm:text-xs font-bold tracking-wide truncate"
+                          style={{ color: track.color }}
+                        >
+                          {track.shortName}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() =>
+                          setTrackMutes((prev) => ({ ...prev, [track.id]: !prev[track.id] }))
+                        }
+                        className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold shrink-0 transition-all ${
+                          isMuted
+                            ? "bg-[#181524] text-red-400 shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-red-500/40"
+                            : "bg-[#181524] text-slate-400 shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32] hover:text-white"
+                        }`}
+                        title={isMuted ? "Unmute track" : "Mute track"}
+                      >
+                        M
+                      </button>
+                    </div>
+
+                    {/* Neumorphic Step Buttons */}
+                    <div className="flex-1 grid grid-cols-16 gap-1 sm:gap-1.5">
+                      {grid[track.id].map((isActive, stepIdx) => {
+                        const isPlayhead = isPlaying && currentStep === stepIdx;
+
+                        return (
+                          <button
+                            key={stepIdx}
+                            onClick={() => toggleStep(track.id, stepIdx)}
+                            className={`h-8 sm:h-10 rounded-lg sm:rounded-xl transition-all duration-100 flex items-center justify-center relative w-full ${
+                              isActive
+                                ? "bg-[#181524] shadow-[inset_2px_2px_5px_#0e0c16,inset_-2px_-2px_5px_#221e32] border"
+                                : "bg-[#181524] shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:shadow-[1px_1px_3px_#0e0c16,-1px_-1px_3px_#221e32] border border-white/[0.02]"
+                            } ${isPlayhead ? "scale-[1.03] z-10" : ""}`}
+                            style={{
+                              borderColor: isActive ? track.color : undefined,
+                            }}
+                          >
+                            {/* Playhead Flash Ring */}
+                            {isPlayhead && (
+                              <span
+                                className="absolute inset-0 rounded-lg sm:rounded-xl border-2 pointer-events-none animate-pulse"
+                                style={{ borderColor: track.color }}
+                              />
+                            )}
+
+                            {/* Active Neumorphic Lit Gem */}
+                            {isActive ? (
+                              <span
+                                className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full shadow-md transition-transform"
+                                style={{
+                                  backgroundColor: track.color,
+                                  boxShadow: `0 0 8px ${track.color}, inset 1px 1px 2px rgba(255,255,255,0.7)`,
+                                }}
+                              />
+                            ) : (
+                              <span className="w-1.5 h-1.5 rounded-full bg-slate-700/30 pointer-events-none" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
             </div>
           </div>
+        )}
 
-          {/* Neumorphic Track Rows */}
-          {DRUM_TRACKS.map((track) => {
-            const isMuted = trackMutes[track.id];
-            return (
-              <div
-                key={track.id}
-                className={`flex items-center gap-1 sm:gap-1.5 min-w-[580px] p-1 rounded-xl transition ${
-                  isMuted ? "opacity-35" : "opacity-100"
-                }`}
-              >
-                {/* Track Channel Capsule */}
-                <div className="w-24 sm:w-32 flex items-center justify-between pr-2 shrink-0">
-                  <div className="flex items-center gap-1.5 sm:gap-2 overflow-hidden min-w-0">
-                    <span
-                      className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full shrink-0 shadow-sm"
-                      style={{
-                        backgroundColor: track.color,
-                        boxShadow: `0 0 6px ${track.color}`,
-                      }}
-                    />
-                    <span
-                      className="text-[11px] sm:text-xs font-bold tracking-wide truncate"
-                      style={{ color: track.color }}
-                    >
-                      {track.shortName}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() =>
-                      setTrackMutes((prev) => ({ ...prev, [track.id]: !prev[track.id] }))
-                    }
-                    className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded uppercase font-bold shrink-0 transition-all ${
-                      isMuted
-                        ? "bg-[#181524] text-red-400 shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] border border-red-500/40"
-                        : "bg-[#181524] text-slate-400 shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32] hover:text-white"
-                    }`}
-                    title={isMuted ? "Unmute track" : "Mute track"}
-                  >
-                    M
-                  </button>
-                </div>
-
-                {/* Neumorphic Step Buttons */}
-                <div className="flex-1 grid grid-cols-16 gap-1 sm:gap-1.5">
-                  {grid[track.id].map((isActive, stepIdx) => {
-                    const isPlayhead = isPlaying && currentStep === stepIdx;
-
-                    return (
-                      <button
-                        key={stepIdx}
-                        onClick={() => toggleStep(track.id, stepIdx)}
-                        className={`h-8 sm:h-10 rounded-lg sm:rounded-xl transition-all duration-100 flex items-center justify-center relative w-full ${
-                          isActive
-                            ? "bg-[#181524] shadow-[inset_2px_2px_5px_#0e0c16,inset_-2px_-2px_5px_#221e32] border"
-                            : "bg-[#181524] shadow-[3px_3px_6px_#0e0c16,-3px_-3px_6px_#221e32] hover:shadow-[1px_1px_3px_#0e0c16,-1px_-1px_3px_#221e32] border border-white/[0.02]"
-                        } ${isPlayhead ? "scale-[1.03] z-10" : ""}`}
-                        style={{
-                          borderColor: isActive ? track.color : undefined,
-                        }}
-                      >
-                        {/* Playhead Flash Ring */}
-                        {isPlayhead && (
-                          <span
-                            className="absolute inset-0 rounded-lg sm:rounded-xl border-2 pointer-events-none animate-pulse"
-                            style={{ borderColor: track.color }}
-                          />
-                        )}
-
-                        {/* Active Neumorphic Lit Gem */}
-                        {isActive ? (
-                          <span
-                            className="w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full shadow-md transition-transform"
-                            style={{
-                              backgroundColor: track.color,
-                              boxShadow: `0 0 8px ${track.color}, inset 1px 1px 2px rgba(255,255,255,0.7)`,
-                            }}
-                          />
-                        ) : (
-                          <span className="w-1.5 h-1.5 rounded-full bg-slate-700/30 pointer-events-none" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+        {/* TAB CONTENT: KITS (24 Authentic Drum Kits) */}
+        {activeTab === "kits" && (
+          <div className="bg-[#181524] shadow-[6px_6px_14px_#0e0c16,-6px_-6px_14px_#221e32] rounded-2xl p-4 sm:p-5 border border-white/[0.04] flex flex-col gap-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-black/20 pb-3">
+              <div className="flex items-center gap-2">
+                <Disc className="w-4 h-4 text-purple-400" />
+                <h2 className="text-sm font-black uppercase tracking-wider text-slate-200">
+                  DRUM ENGINE KIT PROFILES (24 KITS)
+                </h2>
               </div>
-            );
-          })}
-        </div>
+              <span className="text-xs font-mono text-purple-400 bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-3 py-1 rounded-full border border-white/[0.02]">
+                Active: {selectedKit.name} ({selectedKit.category})
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {DRUM_KITS.map((kit) => {
+                const isSelected = kit.id === selectedKitId;
+                return (
+                  <button
+                    key={kit.id}
+                    onClick={() => {
+                      initAudio();
+                      setSelectedKitId(kit.id);
+                      showNotice(`Switched to Drum Kit: ${kit.name}`);
+                    }}
+                    className={`flex flex-col items-start p-3.5 rounded-xl text-left transition-all duration-150 relative ${
+                      isSelected
+                        ? "bg-[#181524] shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] border border-purple-500/50"
+                        : "bg-[#181524] shadow-[4px_4px_8px_#0e0c16,-4px_-4px_8px_#221e32] hover:shadow-[2px_2px_4px_#0e0c16,-2px_-2px_4px_#221e32] border border-white/[0.02]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full mb-1">
+                      <span className={`text-xs font-black truncate ${isSelected ? "text-purple-400" : "text-slate-200"}`}>
+                        {kit.name}
+                      </span>
+                      {isSelected ? (
+                        <Check className="w-3.5 h-3.5 text-purple-400 shrink-0 ml-1" />
+                      ) : (
+                        <span className="text-[10px] text-slate-600 font-mono">{kit.category.split(" ")[0]}</span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-slate-400 leading-snug">
+                      {kit.desc}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* TAB CONTENT: FX (All Sound Parameters & Sliders) */}
+        {activeTab === "fx" && (
+          <div className="flex flex-col gap-4">
+            <div className="text-xs font-black uppercase tracking-wider text-slate-200 flex items-center gap-2 px-1">
+              <Zap className="w-4 h-4 text-cyan-400" />
+              ANALOG TAPE & GROOVE PARAMETERS
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* BPM Slider Pod */}
+              <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.04]">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-pink-400">
+                    <FastForward className="w-3.5 h-3.5" /> TEMPO (BPM)
+                  </span>
+                  <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-md">
+                    {bpm}
+                  </span>
+                </div>
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={60}
+                    max={100}
+                    value={bpm}
+                    onChange={(e) => setBpm(Number(e.target.value))}
+                    className="w-full accent-pink-500 cursor-pointer h-2.5 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
+                  />
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">Standard lo-fi tempo range: 65 - 88 BPM</span>
+              </div>
+
+              {/* Swing Slider Pod */}
+              <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.04]">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-orange-400">
+                    <Sliders className="w-3.5 h-3.5" /> SHUFFLE & SWING
+                  </span>
+                  <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-md">
+                    {swing}%
+                  </span>
+                </div>
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={65}
+                    value={swing}
+                    onChange={(e) => setSwing(Number(e.target.value))}
+                    className="w-full accent-orange-500 cursor-pointer h-2.5 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
+                  />
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">Laid-back unquantized hip-hop bounce</span>
+              </div>
+
+              {/* Tape Warmth Pod */}
+              <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.04]">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-amber-400">
+                    <Flame className="w-3.5 h-3.5" /> TAPE SATURATION
+                  </span>
+                  <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-md">
+                    {tapeWarmth}%
+                  </span>
+                </div>
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={tapeWarmth}
+                    onChange={(e) => setTapeWarmth(Number(e.target.value))}
+                    className="w-full accent-amber-500 cursor-pointer h-2.5 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
+                  />
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">Analog soft-clipping tape drive</span>
+              </div>
+
+              {/* Lo-Fi Filter Pod */}
+              <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.04]">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-cyan-400">
+                    <Zap className="w-3.5 h-3.5" /> LOWPASS CUTOFF
+                  </span>
+                  <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-md">
+                    {filterCutoff} Hz
+                  </span>
+                </div>
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={1800}
+                    max={12000}
+                    step={100}
+                    value={filterCutoff}
+                    onChange={(e) => setFilterCutoff(Number(e.target.value))}
+                    className="w-full accent-cyan-400 cursor-pointer h-2.5 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
+                  />
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">Rolls off high frequencies for sampler tone</span>
+              </div>
+
+              {/* Vinyl Dust Pod */}
+              <div className="flex flex-col gap-2.5 bg-[#181524] shadow-[6px_6px_12px_#0e0c16,-6px_-6px_12px_#221e32] rounded-2xl p-4 border border-white/[0.04]">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-300">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <Disc className="w-3.5 h-3.5" /> VINYL CRACKLE
+                  </span>
+                  <span className="font-mono text-white text-xs bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] px-2.5 py-0.5 rounded-md">
+                    {vinylLevel}%
+                  </span>
+                </div>
+                <div className="py-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={vinylLevel}
+                    onChange={(e) => setVinylLevel(Number(e.target.value))}
+                    className="w-full accent-emerald-400 cursor-pointer h-2.5 bg-[#120f1c] shadow-[inset_1px_1px_3px_#0e0c16,inset_-1px_-1px_3px_#221e32] rounded-lg appearance-none"
+                  />
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">Turntable dust, hiss & needle pops</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB CONTENT: EXPORT (Export Options) */}
+        {activeTab === "export" && (
+          <div className="flex flex-col gap-4 bg-[#181524] shadow-[10px_10px_20px_#0e0c16,-10px_-10px_20px_#221e32] border border-white/[0.03] rounded-2xl p-5">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-black/20 pb-3">
+              <div>
+                <h2 className="text-sm font-black uppercase tracking-wider text-slate-200 flex items-center gap-2">
+                  <FolderDown className="w-4 h-4 text-emerald-400 shrink-0" />
+                  EXPORT & DOWNLOAD OPTIONS
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Export master 2-bar loops directly to FL Studio, Ableton Live, Logic Pro, or your samples folder.
+                </p>
+              </div>
+
+              {/* Download All Button */}
+              <button
+                onClick={handleExportAll}
+                disabled={exportingFormat !== null}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#181524] text-slate-200 text-xs font-black uppercase tracking-wider shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-white active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition border border-emerald-500/30 disabled:opacity-50 shrink-0"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>DOWNLOAD ALL (.WAV + .MID)</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              {/* WAV Export Card */}
+              <button
+                onClick={handleExportWav}
+                disabled={exportingFormat !== null}
+                className="flex items-center justify-between p-4 rounded-xl bg-[#181524] shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:shadow-[2px_2px_5px_#0e0c16,-2px_-2px_5px_#221e32] active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition group disabled:opacity-50 text-left border border-white/[0.02]"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] flex items-center justify-center text-pink-400 group-hover:scale-105 transition shrink-0">
+                    <Music className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm text-slate-200 group-hover:text-pink-300 transition truncate">
+                      .WAV AUDIO MASTER
+                    </div>
+                    <div className="text-xs text-slate-400 truncate">16-bit 44.1kHz Stereo PCM Loop (2 Bars)</div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4 text-pink-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
+              </button>
+
+              {/* MIDI Export Card */}
+              <button
+                onClick={handleExportMidi}
+                disabled={exportingFormat !== null}
+                className="flex items-center justify-between p-4 rounded-xl bg-[#181524] shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:shadow-[2px_2px_5px_#0e0c16,-2px_-2px_5px_#221e32] active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition group disabled:opacity-50 text-left border border-white/[0.02]"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] flex items-center justify-center text-cyan-400 group-hover:scale-105 transition shrink-0">
+                    <Layers className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm text-slate-200 group-hover:text-cyan-300 transition truncate">
+                      .MID FILE (MIDI)
+                    </div>
+                    <div className="text-xs text-slate-400 truncate">Standard GM Drum Channel 10 Groove</div>
+                  </div>
+                </div>
+                <Download className="w-4 h-4 text-cyan-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* NOTIFICATION FEEDBACK */}
         {exportNotice && (
@@ -2355,73 +2438,6 @@ export default function Component() {
             <span>{exportNotice}</span>
           </div>
         )}
-
-        {/* EXPORT SECTION: Tactile Neumorphic Cards */}
-        <div className="flex flex-col gap-3.5 bg-[#181524] shadow-[10px_10px_20px_#0e0c16,-10px_-10px_20px_#221e32] border border-white/[0.03] rounded-2xl p-4 sm:p-5">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-black uppercase tracking-wider text-slate-200 flex items-center gap-2">
-                <FolderDown className="w-4 h-4 text-cyan-400 shrink-0" />
-                EXPORT CONTROLS
-              </h2>
-              <p className="text-xs text-slate-400">
-                Direct export to FL Studio, Ableton Live, Logic Pro, or desktop folder.
-              </p>
-            </div>
-
-            {/* Download All Neumorphic Extruded Button */}
-            <button
-              onClick={handleExportAll}
-              disabled={exportingFormat !== null}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#181524] text-slate-200 text-xs font-black uppercase tracking-wider shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:text-white active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition border border-pink-500/30 disabled:opacity-50 shrink-0"
-            >
-              <Download className="w-3.5 h-3.5 text-pink-400 shrink-0" />
-              <span>DOWNLOAD ALL (.WAV + .MID)</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-            {/* WAV Export Button */}
-            <button
-              onClick={handleExportWav}
-              disabled={exportingFormat !== null}
-              className="flex items-center justify-between p-3.5 rounded-xl bg-[#181524] shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:shadow-[2px_2px_5px_#0e0c16,-2px_-2px_5px_#221e32] active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition group disabled:opacity-50 text-left border border-white/[0.02]"
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] flex items-center justify-center text-pink-400 group-hover:scale-105 transition shrink-0">
-                  <Music className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-slate-200 group-hover:text-pink-300 transition truncate">
-                    .WAV AUDIO LOOP
-                  </div>
-                  <div className="text-[10px] text-slate-500 truncate">16-bit 44.1kHz Master</div>
-                </div>
-              </div>
-              <Download className="w-4 h-4 text-pink-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
-            </button>
-
-            {/* MIDI Export Button */}
-            <button
-              onClick={handleExportMidi}
-              disabled={exportingFormat !== null}
-              className="flex items-center justify-between p-3.5 rounded-xl bg-[#181524] shadow-[5px_5px_10px_#0e0c16,-5px_-5px_10px_#221e32] hover:shadow-[2px_2px_5px_#0e0c16,-2px_-2px_5px_#221e32] active:shadow-[inset_3px_3px_6px_#0e0c16,inset_-3px_-3px_6px_#221e32] transition group disabled:opacity-50 text-left border border-white/[0.02]"
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-[#181524] shadow-[inset_2px_2px_4px_#0e0c16,inset_-2px_-2px_4px_#221e32] flex items-center justify-center text-cyan-400 group-hover:scale-105 transition shrink-0">
-                  <Layers className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-bold text-xs sm:text-sm text-slate-200 group-hover:text-cyan-300 transition truncate">
-                    .MID FILE (MIDI)
-                  </div>
-                  <div className="text-[10px] text-slate-500 truncate">GM Drum Channel 10</div>
-                </div>
-              </div>
-              <Download className="w-4 h-4 text-cyan-400 group-hover:translate-y-0.5 transition shrink-0 ml-2" />
-            </button>
-          </div>
-        </div>
 
         {/* FOOTER */}
         <footer className="flex flex-col items-center justify-center text-center text-[10px] text-slate-500 pt-3 border-t border-black/30 gap-2">
